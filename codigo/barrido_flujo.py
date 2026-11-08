@@ -274,45 +274,64 @@ def ajustar_runs(runs, fcrop="auto", n_anchos=4):
     return out
 
 
-def saltos(I_uA, fr, k=4, umbral_Hz=None, n_sigma=3.0, sep=6, signo="dominante", n_ajuste=8,
-           min_signif=2.0):
-    """Detecta saltos de fr vs corriente (mismo método que el informe).
+def saltos(I_uA, fr, k=6, umbral_Hz=None, n_sigma=3.0, minimo_Hz=30e3, sep=None,
+           signo="dominante", periodico=True, n_sigma_periodico=2.5, n_ajuste=8, min_signif=2.0):
+    """Detecta saltos de fr vs corriente.
 
-    Para cada punto j compara la media de los k puntos siguientes con la de los k anteriores
-    (promediar baja el ruido punto a punto, que con un ajuste por traza es comparable al salto).
-    Se aceptan los máximos locales con |diferencia| > umbral, separados más de `sep` puntos.
+    Para cada posición j ajusta, en una ventana de k puntos a cada lado, una recta común más
+    un escalón en j:   fr = a + b (I - I_j) + c · [I >= I_j]
+    c es el tamaño del salto. Al tener la recta en el modelo, la pendiente dentro de cada rama
+    del diente de sierra no se confunde con un salto (con datos poco ruidosos, como a potencia
+    alta, la diferencia de medias sí la confundía).
+    Cerca de los extremos del barrido la ventana se achica (mínimo 4 puntos por lado).
+    Se aceptan los máximos locales de |c| por encima del umbral, separados más de `sep` puntos.
 
-    umbral_Hz : umbral fijo [Hz]; None = n_sigma × ruido de la diferencia de medias
-                (ruido punto a punto estimado robustamente con la MAD de Δfr).
-    signo     : 'dominante' = se queda solo con los saltos del signo más frecuente
-                (los de signo contrario suelen ser ruido o el final de una rama);
+    umbral_Hz : umbral fijo [Hz]; None = max(n_sigma × error de c, minimo_Hz), con el error de c
+                calculado a partir del ruido punto a punto, que se estima robustamente con la MAD
+                de las segundas diferencias (no la afectan ni la pendiente ni la curvatura suave).
+    sep       : separación mínima entre saltos [puntos]; None = k.
+    signo     : 'dominante' = se queda solo con los saltos del signo más frecuente;
                 '+' / '-' = solo ese signo (en el orden de medición); None = todos.
+    periodico : si hay >= 3 saltos, ajusta su período y busca saltos que falten en las posiciones
+                esperadas (± período/6) con un umbral más bajo (n_sigma_periodico), con el mismo
+                signo y una ventana más ancha (0.4 períodos por lado, sin cruzar otros saltos).
+                Sirve para los saltos chicos en datos ruidosos.
     n_ajuste  : puntos a cada lado para medir el tamaño del salto con dos rectas locales
                 (evaluadas en la posición del salto, sin cruzar otros saltos).
     min_signif: descarta saltos cuyo tamaño ajustado sea < min_signif × su error (o de signo
-                contrario al score); None = no filtra.
+                contrario); None = no filtra.
 
     Devuelve una lista de dicts (en el orden de medición) con
     j (el salto ocurre entre los índices j-1 y j), I (posición [uA]), df y df_err [Hz] (tamaño
-    del salto en el orden de medición, de las rectas locales) y score [Hz] (diferencia de medias).
+    del salto en el orden de medición, de las rectas locales) y score [Hz] (c del ajuste con escalón).
     """
     I_uA, fr = np.asarray(I_uA, float), np.asarray(fr, float)
     idx = np.flatnonzero(np.isfinite(fr) & np.isfinite(I_uA))      # ignora ajustes fallidos
     I, y = I_uA[idx], fr[idx]
     n = len(y)
+    sep = k if sep is None else sep
     if n < 2 * k + 1:
         return []
-    if umbral_Hz is None:
-        dy = np.diff(y)
-        sig = 1.4826 * np.median(np.abs(dy - np.median(dy))) / np.sqrt(2)   # ruido de un punto
-        umbral_Hz = n_sigma * sig * np.sqrt(2 / k)
-    sc = np.zeros(n)
-    for j in range(k, n - k + 1):
-        sc[j] = y[j:j + k].mean() - y[j - k:j].mean()
+    d2 = y[2:] - 2 * y[1:-1] + y[:-2]
+    sig = 1.4826 * np.median(np.abs(d2 - np.median(d2))) / np.sqrt(6)    # ruido de un punto
+
+    def escalon(j, kl, kr):
+        """Ajuste recta + escalón en j con kl puntos a la izquierda y kr a la derecha: (c, error)."""
+        x = I[j - kl:j + kr] - (I[j - 1] + I[j]) / 2
+        X = np.column_stack([np.ones(kl + kr), x, np.r_[np.zeros(kl), np.ones(kr)]])
+        coef, *_ = np.linalg.lstsq(X, y[j - kl:j + kr], rcond=None)
+        return coef[2], sig * np.sqrt(np.linalg.inv(X.T @ X)[2, 2])
+
+    sc, err_c = np.zeros(n), np.full(n, np.inf)
+    for j in range(4, n - 3):
+        sc[j], err_c[j] = escalon(j, min(k, j), min(k, n - j))
+    umbral = np.maximum(n_sigma * err_c, minimo_Hz) if umbral_Hz is None else np.full(n, umbral_Hz)
     elegidos = []
     for j in np.argsort(-np.abs(sc)):
-        if abs(sc[j]) < umbral_Hz:
+        if abs(sc[j]) == 0:
             break
+        if abs(sc[j]) < umbral[j]:
+            continue
         if all(abs(j - e) > sep for e in elegidos):
             elegidos.append(int(j))
     elegidos.sort()
@@ -320,6 +339,35 @@ def saltos(I_uA, fr, k=4, umbral_Hz=None, n_sigma=3.0, sep=6, signo="dominante",
         s = np.sign(sc[elegidos])
         quiero = (1 if s.sum() >= 0 else -1) if signo == "dominante" else (1 if signo == "+" else -1)
         elegidos = [j for j in elegidos if np.sign(sc[j]) == quiero]
+
+    if periodico and len(elegidos) >= 3:
+        Im = (I[:-1] + I[1:]) / 2                      # Im[j-1] = posición de un salto en j
+        pos = Im[np.array(elegidos) - 1]
+        o = np.argsort(pos); pos = pos[o]
+        T0 = np.median(np.diff(pos))
+        m_ = np.round((pos - pos[0]) / T0)
+        T, x0 = np.polyfit(m_, pos, 1)
+        sgn = np.sign(np.sum(np.sign(sc[elegidos])))
+        lo, hi = min(Im[3], Im[n - 5]), max(Im[3], Im[n - 5])
+        k2 = max(k, int(round(0.4 * abs(T) / np.median(np.abs(np.diff(I))))))
+        for m in range(int(np.floor((lo - x0) / T)) - 1, int(np.ceil((hi - x0) / T)) + 2):
+            esperado = x0 + m * T
+            if not lo <= esperado <= hi or np.min(np.abs(pos - esperado)) < T / 4:
+                continue
+            cand = []
+            for j in range(4, n - 3):
+                if abs(Im[j - 1] - esperado) > abs(T) / 6 or not all(abs(j - e) > sep for e in elegidos):
+                    continue
+                izq = max([e for e in elegidos if e < j], default=0)
+                der = min([e for e in elegidos if e > j], default=n)
+                c, e_c = escalon(j, min(k2, j - izq), min(k2, der - j))
+                if np.sign(c) == sgn and abs(c) >= max(n_sigma_periodico * e_c, minimo_Hz):
+                    cand.append((abs(c) / e_c, j, c))
+            if cand:
+                _, j, c = max(cand)
+                sc[j] = c
+                elegidos.append(j)
+        elegidos.sort()
 
     out = []
     for m, j in enumerate(elegidos):
