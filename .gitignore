@@ -1,0 +1,17 @@
+# Python / Jupyter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Archivos temporales de SQLite (si se abre una base mientras se mide)
+*-wal
+*-shm
+*.db-journal
+
+# Clones de otros repos
+RFP-Software/
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini

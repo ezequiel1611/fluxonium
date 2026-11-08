@@ -1,0 +1,10 @@
+# Entorno usado en las mediciones (conda env "quantum", Python 3.10.14)
+qcodes==0.52.0
+numpy==1.26.4
+scipy==1.14.1
+matplotlib==3.9.1
+pandas==2.2.2
+pyvisa==1.14.1
+ipython==8.26.0
+tqdm==4.70.0
+SciencePlots        # estilos de gráficos usados en readout.ipynb

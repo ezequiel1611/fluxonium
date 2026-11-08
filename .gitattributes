@@ -1,0 +1,9 @@
+# Bases de datos de QCoDeS (SQLite) por Git LFS
+datos/**/*.db filter=lfs diff=lfs merge=lfs -text
+datos/fluxonium_v2 filter=lfs diff=lfs merge=lfs -text
+datos/fluxonium_database/resonadores filter=lfs diff=lfs merge=lfs -text
+datos/fluxonium_database/resonancia_flux filter=lfs diff=lfs merge=lfs -text
+*.ipynb text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.csv text eol=lf
